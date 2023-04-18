@@ -1,0 +1,95 @@
+---
+# tasks file for role_build_collection
+
+- name: "Task - build_collection - main - Consolidated collection destination"
+  ansible.builtin.set_fact:
+    collection_base: '{{ collection_path }}/{{ collection_namespace }}/{{ collection_name }}'
+
+- name: "Task - build_collection - main - check if collection is pre-existing"
+  ansible.builtin.stat:
+    path: '{{ collection_base }}/{{ collection_check_flag_file }}'
+  register: collection_check_file_stat
+
+- name: "Task - build_collection - main - check if collection is pre-existing"
+  ansible.builtin.shell: |
+    ansible-galaxy collection init {{ collection_namespace }}.{{ collection_name }}
+  args:
+    chdir: '{{ collection_path }}/'
+    creates: '{{ collection_base }}/{{ collection_check_flag_file }}'
+  when:
+    - not collection_check_file_stat.stat.exists
+
+- name: "Task - build_collection - main - Prelimit variable"
+  ansible.builtin.set_fact:
+    repo_list_derived: []
+    repo_prefix: '{{ git_method }}@{{ git_ssh_base }}/{{ organization }}/{{ project }}'
+    collection_url: 'https://{{ organization }}@{[ git_http_base }}/{{ organization }}/{{ project }}/_git/{{ collection_namespace }}.{{ collection_name }}'
+
+- name: "Task - build_collection - main - Build list of repos to add to collection"
+  ansible.builtin.set_fact:
+    repo_list_derived: "{{ repo_list_derived + [{'name': repo.name, 'url': repo_prefix + '/' + repo.name, 'version': repo.version}] }}"
+  with_items:
+    - '{{ repo_list }}'
+  loop_control:
+    loop_var: repo
+    label: 'Adding {{ repo }}'
+
+- name: "Task - build_collection - main - check if git has been initialized"
+  ansible.builtin.stat:
+    path: '{{ collection_base }}/{{ git_check_flag_file }}'
+  register: git_check_file_stat
+
+- name: "Task - build_collection - main - Add roles to collection"
+  ansible.builtin.shell: |
+    git init
+  args:
+    chdir: '{{ collection_base }}'
+    creates: '{{ collection_base }}/{{ git_check_flag_file }}'
+  when: not git_check_file_stat.stat.exists
+
+- name: "Task - build_collection - main - Add roles to collection"
+  ansible.builtin.shell: |
+    git submodule add --name {{ repo.name }} {{ repo.url }} roles/{{ repo.name }}
+  args:
+    chdir: '{{ collection_base }}'
+    creates: '{{ collection_base }}/roles/{{ repo.name }}'
+  with_items:
+    - '{{ repo_list_derived }}'
+  loop_control:
+    loop_var: repo
+    label: 'Adding {{ repo.name }} to collection'
+  register: submodule_create
+
+- name: "Task - build_collection - main - Add roles to collection"
+  ansible.builtin.shell: |
+    git submodule update --init --recursive
+    git submodule sync --recursive
+  args:
+    chdir: '{{ collection_base }}'
+  with_items:
+    - '{{ repo_list_derived }}'
+  loop_control:
+    loop_var: repo
+    label: 'sync and update {{ repo.name }}'
+  register: submodule_sync
+
+- name: "Task - build_collection - main - Create galaxy.yml"
+  ansible.builtin.template:
+    src: galaxy.yml.j2
+    dest: '{{ collection_base }}/galaxy.yml'
+    owner: '{{ ansible_facts.user_id }}'
+    group: '{{ ansible_facts.user_gid }}'
+    mode: '0644'
+
+- name: "Task - build_collection - main - Build Collection"
+  ansible.builtin.shell: |
+    ansible-galaxy collection build --output-path {{ collection_path }}
+  args:
+    chdir: '{{ collection_base }}'
+  register: build_output
+
+- name: "Task - build_collection - main - Build Collection"
+  ansible.builtin.debug:
+    var: build_output
+
+...
